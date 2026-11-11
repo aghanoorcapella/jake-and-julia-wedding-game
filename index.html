@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Jake &amp; Julia: The Road to Promise City</title>
+<meta name="description" content="A wedding gift video game for Jake Elafros and Julia Buchholz. November 21, 2026, Promise City, Iowa.">
+<style>
+  html,body{margin:0;height:100%;background:#14202e;overflow:hidden;font-family:"Courier New",monospace;-webkit-user-select:none;user-select:none;touch-action:none}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column}
+  canvas{image-rendering:pixelated;image-rendering:crisp-edges;background:#000;box-shadow:0 0 40px rgba(0,0,0,.6)}
+  #touch{position:fixed;left:0;right:0;bottom:0;display:none;justify-content:space-between;align-items:flex-end;padding:10px 14px 18px;pointer-events:none}
+  #touch.on{display:flex}
+  .pad{display:grid;grid-template-columns:repeat(3,54px);grid-template-rows:repeat(3,54px);gap:4px;pointer-events:auto}
+  .b{background:rgba(255,255,255,.22);border:2px solid rgba(255,255,255,.5);border-radius:14px;color:#fff;font:bold 20px "Courier New",monospace;display:flex;align-items:center;justify-content:center;pointer-events:auto}
+  .b:active,.b.down{background:rgba(255,220,120,.6)}
+  #a{width:84px;height:84px;border-radius:50%;font-size:22px}
+  #mute{position:fixed;top:6px;right:8px;color:#fff;font:12px "Courier New",monospace;opacity:.7;cursor:pointer;background:rgba(0,0,0,.4);padding:3px 7px;border-radius:6px}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="640" height="400"></canvas></div>
+<div id="mute">♪ music: on (M)</div>
+<div id="touch">
+  <div class="pad">
+    <span></span><div class="b" data-k="u">▲</div><span></span>
+    <div class="b" data-k="l">◀</div><span></span><div class="b" data-k="r">▶</div>
+    <span></span><div class="b" data-k="d">▼</div><span></span>
+  </div>
+  <div class="b" id="a" data-k="a">A</div>
+</div>
+<script>
+'use strict';
+/* =====================================================================
+   JAKE & JULIA: THE ROAD TO PROMISE CITY
+   A wedding gift. Story and details come from their wedding website.
+   Edit GIFT_FROM to sign the gift.
+   ===================================================================== */
+const GIFT_FROM = "Your friends";
+const WEDDING = new Date(2026, 10, 21);
+
+const W = 640, H = 400;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function fit() {
+  const touchOn = document.getElementById('touch').classList.contains('on');
+  const availH = innerHeight - (touchOn && innerHeight > innerWidth ? 170 : 0);
+  const s = Math.min(innerWidth / W, availH / H);
+  cv.style.width = Math.floor(W * s) + 'px';
+  cv.style.height = Math.floor(H * s) + 'px';
+}
+if ('ontouchstart' in window || navigator.maxTouchPoints > 0) document.getElementById('touch').classList.add('on');
+addEventListener('resize', fit); fit();
+
+/* ---------- input ---------- */
+const keys = {}, tk = {};
+let actPressed = false;
+const ACT = [' ', 'Enter', 'z', 'Z'];
+addEventListener('keydown', e => {
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+  if (!keys[e.key]) {
+    if (ACT.includes(e.key)) actPressed = true;
+    if (e.key === 'm' || e.key === 'M') toggleMute();
+    if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') navPress = -1;
+    if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') navPress = 1;
+  }
+  keys[e.key] = true; audioInit();
+});
+addEventListener('keyup', e => { keys[e.key] = false; });
+let navPress = 0;
+const inL = () => keys.ArrowLeft || keys.a || keys.A || tk.l;
+const inR = () => keys.ArrowRight || keys.d || keys.D || tk.r;
+const inU = () => keys.ArrowUp || keys.w || keys.W || tk.u;
+const inD = () => keys.ArrowDown || keys.s || keys.S || tk.d;
+document.querySelectorAll('[data-k]').forEach(b => {
+  const k = b.dataset.k;
+  const on = e => { e.preventDefault(); audioInit(); if (k === 'a') actPressed = true; else { tk[k] = true; if (k === 'u') navPress = -1; if (k === 'd') navPress = 1; } b.classList.add('down'); };
+  const off = e => { e.preventDefault(); tk[k] = false; b.classList.remove('down'); };
+  b.addEventListener('touchstart', on, { passive: false }); b.addEventListener('touchend', off, { passive: false }); b.addEventListener('touchcancel', off, { passive: false });
+  b.addEventListener('mousedown', on); b.addEventListener('mouseup', off); b.addEventListener('mouseleave', off);
+});
+cv.addEventListener('pointerdown', () => { audioInit(); if (!document.getElementById('touch').classList.contains('on')) actPressed = true; });
+document.getElementById('mute').addEventListener('click', () => { audioInit(); toggleMute(); });
+
+/* ---------- audio (all original, tiny chiptune) ---------- */
+let ac = null, muted = false, musicTimer = null, mi = 0;
+function audioInit() {
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); startMusic(); } catch (e) { ac = null; }
+}
+function toggleMute() { muted = !muted; document.getElementById('mute').textContent = '♪ music: ' + (muted ? 'off' : 'on') + ' (M)'; }
+function tone(f, d, type, v, when) {
+  if (!ac || muted) return;
+  const t = ac.currentTime + (when || 0), o = ac.createOscillator(), g = ac.createGain();
+  o.type = type || 'square'; o.frequency.value = f;
+  g.gain.setValueAtTime(v || 0.05, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + d + 0.03);
+}
+const N = { C3: 130.8, E3: 164.8, F3: 174.6, G3: 196, A3: 220, C4: 261.6, D4: 293.7, E4: 329.6, F4: 349.2, G4: 392, A4: 440, B4: 493.9, C5: 523.3, D5: 587.3, E5: 659.3 };
+const MEL = ['E4', 'G4', 'C5', 'G4', 'A4', 'C5', 'E5', 'C5', 'F4', 'A4', 'C5', 'A4', 'G4', 'B4', 'D5', 'B4'];
+const BAS = ['C3', 'C3', 'A3', 'A3', 'F3', 'F3', 'G3', 'G3'];
+function startMusic() {
+  musicTimer = setInterval(() => {
+    if (muted || !ac) return;
+    tone(N[MEL[mi % 16]], 0.45, 'triangle', 0.035);
+    if (mi % 2 === 0) tone(N[BAS[(mi / 2 | 0) % 8]], 0.7, 'sine', 0.05);
+    mi++;
+  }, 330);
+}
+const sfx = {
+  blip() { tone(660, .05, 'square', .03); },
+  good() { tone(660, .08, 'square', .05); tone(880, .1, 'square', .05, .07); },
+  bad() { tone(160, .2, 'sawtooth', .06); },
+  win() { [523, 659, 784, 1046].forEach((f, i) => tone(f, .25, 'triangle', .07, i * .1)); },
+  step() { tone(120, .03, 'square', .01); }
+};
+
+/* ---------- drawing helpers ---------- */
+function txt(s, x, y, o) {
+  o = o || {};
+  ctx.font = (o.b === false ? '' : 'bold ') + (o.size || 14) + 'px "Courier New",monospace';
+  ctx.textAlign = o.align || 'left'; ctx.textBaseline = 'top';
+  if (o.shadow !== false) { ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillText(s, x + 1, y + 1); }
+  ctx.fillStyle = o.color || '#fff'; ctx.fillText(s, x, y);
+}
+function wrap(s, maxW, size) {
+  ctx.font = 'bold ' + size + 'px "Courier New",monospace';
+  const words = s.split(' '), lines = []; let cur = '';
+  for (const w of words) { const t = cur ? cur + ' ' + w : w; if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t; }
+  if (cur) lines.push(cur); return lines;
+}
+function panel(x, y, w, h, fill, stroke) {
+  ctx.fillStyle = fill || 'rgba(16,24,40,.93)'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = stroke || '#f5d98a'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+}
+function heart(x, y, s, c) {
+  ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(x, y + s * .35);
+  ctx.bezierCurveTo(x - s, y - s * .5, x - s * .4, y - s * 1.1, x, y - s * .4);
+  ctx.bezierCurveTo(x + s * .4, y - s * 1.1, x + s, y - s * .5, x, y + s * .35); ctx.fill();
+}
+function star(x, y, r, c) {
+  ctx.fillStyle = c; ctx.beginPath();
+  for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * .45 : r; ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+  ctx.closePath(); ctx.fill();
+}
+function circle(x, y, r, c) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); }
+function rect(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), w, h); }
+
+/* ---------- people ---------- */
+const SK = ['#f2cba5', '#e8b88f', '#d9a37a', '#c68b61', '#8d5a3b'];
+function look(o) { return Object.assign({ skin: SK[0], hair: '#6b4423', outfit: '#4a6fa5', pants: '#2b2b3a', style: 'short', glasses: false, dress: false, tie: null, veil: false }, o); }
+const JAKE = look({ skin: SK[0], hair: '#7a5230', outfit: '#2f4a6b', pants: '#33384a' });
+const JAKE_TUX = look({ skin: SK[0], hair: '#7a5230', outfit: '#1c2433', pants: '#1c2433', tie: '#f5d98a' });
+const JULIA = look({ skin: SK[1], hair: '#6b3f22', outfit: '#d98ba0', style: 'long', dress: true });
+const JULIA_BRIDE = look({ skin: SK[1], hair: '#6b3f22', outfit: '#fbf7f0', style: 'long', dress: true, veil: true });
+function person(x, y, p, dir, walk, sit) {
+  const s = walk ? Math.sin(walk * 12) : 0;
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(x, y, 8, 3, 0, 0, 7); ctx.fill();
+  const R = (a, b, w, h, c) => rect(x + a, y + b, w, h, c);
+  if (!sit) {
+    if (p.dress) { R(-7, -12, 14, 10, p.outfit); R(-8, -4, 16, 3, p.outfit); R(-3, -1, 2, 1, p.skin); R(1, -1, 2, 1, p.skin); }
+    else { R(-4, -10, 3, 10 + (s > .3 ? -1 : 0), p.pants); R(1, -10, 3, 10 + (s < -.3 ? -1 : 0), p.pants); }
+  }
+  R(-5, -20, 10, 10, p.outfit);
+  if (p.tie) R(-1, -19, 2, 6, p.tie);
+  R(-7, -19, 2, 8, p.outfit); R(5, -19, 2, 8, p.outfit); R(-7, -11, 2, 2, p.skin); R(5, -11, 2, 2, p.skin);
+  R(-5, -30, 10, 10, p.skin);
+  if (dir === 3) { R(-6, -32, 12, 13, p.hair); if (p.style === 'long') R(-6, -20, 12, 8, p.hair); }
+  else {
+    R(-6, -32, 12, 5, p.hair);
+    if (p.style === 'long') { R(-6, -30, 2, 14, p.hair); R(4, -30, 2, 14, p.hair); }
+    else { R(-6, -30, 2, 3, p.hair); R(4, -30, 2, 3, p.hair); }
+    if (p.style === 'bun') R(-2, -36, 5, 4, p.hair);
+    const ey = -26;
+    if (dir === 0) { R(-3, ey, 2, 2, '#222'); R(1, ey, 2, 2, '#222'); }
+    else if (dir === 1) R(-4, ey, 2, 2, '#222'); else R(2, ey, 2, 2, '#222');
+    if (p.glasses) { ctx.strokeStyle = '#222'; ctx.lineWidth = 1; if (dir === 0) { ctx.strokeRect(x - 4.5, y + ey - 1.5, 4, 4); ctx.strokeRect(x + .5, y + ey - 1.5, 4, 4); } }
+    if (dir === 0) R(-1, -22, 2, 1, '#b3544e');
+  }
+  if (p.veil) { R(-7, -33, 14, 3, '#ffffff'); R(-7, -30, 2, 24, 'rgba(255,255,255,.75)'); R(5, -30, 2, 24, 'rgba(255,255,255,.75)'); }
+}
+
+/* ---------- particles ---------- */
+const parts = [];
+function burst(x, y, n, kind) {
+  for (let i = 0; i < n; i++) parts.push({ x, y, vx: rnd(-130, 130), vy: rnd(-240, -40), life: rnd(.9, 1.8), t: 0, kind, c: ['#ff6b8b', '#ffd166', '#6bd5ff', '#9be37a', '#c79bff'][i % 5], r: rnd(2, 4.5) });
+}
+function partsUpdate(dt) {
+  for (const p of parts) { p.t += dt; p.vy += 380 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+  for (let i = parts.length - 1; i >= 0; i--) if (parts[i].t > parts[i].life) parts.splice(i, 1);
+}
+function partsDraw() {
+  for (const p of parts) {
+    ctx.globalAlpha = clamp(1 - p.t / p.life, 0, 1);
+    if (p.kind === 'heart') heart(p.x, p.y, p.r * 2.2, '#ff6b8b'); else rect(p.x, p.y, p.r, p.r, p.c);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- dialogue ---------- */
+const dlg = { q: [], cur: null, shown: 0, done: null, lines: [] };
+function say(lines, done) { dlg.q = lines.slice(); dlg.done = done || null; nextLine(); }
+function nextLine() {
+  const l = dlg.q.shift();
+  if (!l) { dlg.cur = null; const d = dlg.done; dlg.done = null; if (d) d(); return; }
+  dlg.cur = typeof l === 'string' ? { who: '', t: l } : { who: l[0], t: l[1] };
+  dlg.shown = 0; dlg.lines = null;
+}
+function dlgUpdate(dt) {
+  if (!dlg.cur) return false;
+  dlg.shown += dt * 55;
+  if (actPressed) {
+    actPressed = false;
+    if (dlg.shown < dlg.cur.t.length) dlg.shown = 1e9; else { sfx.blip(); nextLine(); }
+  }
+  return !!dlg.cur;
+}
+function dlgDraw() {
+  if (!dlg.cur) return;
+  const x = 16, y = H - 118, w = W - 32, h = 104;
+  panel(x, y, w, h);
+  let ty = y + 10;
+  if (dlg.cur.who) { txt(dlg.cur.who, x + 14, ty, { color: '#f5d98a', size: 14 }); ty += 20; }
+  if (!dlg.lines) dlg.lines = wrap(dlg.cur.t, w - 30, 14);
+  let rem = Math.floor(dlg.shown);
+  for (const ln of dlg.lines) {
+    if (rem <= 0) break;
+    txt(ln.slice(0, rem), x + 14, ty, { size: 14 }); rem -= ln.length + 1; ty += 18;
+  }
+  if (dlg.shown >= dlg.cur.t.length && Math.floor(performance.now() / 400) % 2) txt('▼', x + w - 28, y + h - 22, { color: '#f5d98a' });
+}
+
+/* ---------- scenes, fades, progress ---------- */
+let scene = null, fade = { a: 0, dir: 0, cb: null };
+function go(s) { scene = s; dlg.cur = null; dlg.q = []; dlg.done = null; parts.length = 0; if (s.enter) s.enter(); }
+function fadeTo(cb) { if (fade.dir !== 0) return; fade.dir = 1; fade.cb = cb; }
+let progress = 0;
+try { progress = parseInt(localStorage.getItem('jj_progress') || '0', 10) || 0; } catch (e) { }
+function saveProgress(n) { progress = Math.max(progress, n); try { localStorage.setItem('jj_progress', String(progress)); } catch (e) { } }
+
+function Card(title, sub, body, next, opt) {
+  opt = opt || {}; let t = 0;
+  const stars = Array.from({ length: 50 }, () => ({ x: rnd(0, W), y: rnd(0, H), s: rnd(.5, 2) }));
+  return {
+    update(dt) { t += dt; if (actPressed && t > .35) { sfx.blip(); fadeTo(next); } },
+    draw() {
+      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, opt.c1 || '#1d2b4a'); g.addColorStop(1, opt.c2 || '#4b3b6b');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      for (const s of stars) { ctx.globalAlpha = .4 + .6 * Math.abs(Math.sin(t * s.s + s.x)); rect(s.x, s.y, 2, 2, '#fff'); } ctx.globalAlpha = 1;
+      txt(title, W / 2, 70, { align: 'center', size: 26, color: '#f5d98a' });
+      if (sub) txt(sub, W / 2, 108, { align: 'center', size: 15, color: '#cfe3ff' });
+      let y = 150;
+      for (const para of body) { for (const ln of wrap(para, 500, 15)) { txt(ln, W / 2, y, { align: 'center', size: 15 }); y += 21; } y += 10; }
+      if (Math.floor(t * 2) % 2) txt('Press SPACE / A to continue', W / 2, H - 40, { align: 'center', size: 13, color: '#f5d98a' });
+    }
+  };
+}
+
+/* ---------- generic top-down walking scene ---------- */
+function makeWalk(cfg) {
+  const P = { x: cfg.start[0], y: cfg.start[1], dir: 3, walk: 0 };
+  const trail = []; let msg = '', msgT = 0;
+  const sc = {
+    P, cfg, t: 0, flags: {}, frozen: false,
+    toast(m, d) { msg = m; msgT = d || 3; },
+    update(dt, talking) {
+      sc.t += dt; msgT = Math.max(0, msgT - dt);
+      partsUpdate(dt);
+      if (talking || sc.frozen) return;
+      const dx = (inR() ? 1 : 0) - (inL() ? 1 : 0), dy = (inD() ? 1 : 0) - (inU() ? 1 : 0);
+      if (dx || dy) {
+        const m = Math.hypot(dx, dy), sp = 112 * dt / m;
+        const mv = (ax, ay) => { const nx = clamp(P.x + ax, 10, W - 10), ny = clamp(P.y + ay, cfg.top || 60, H - 6); if (!blocked(nx, ny)) { P.x = nx; P.y = ny; } };
+        mv(dx * sp, 0); mv(0, dy * sp);
+        P.walk += dt; P.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 1 : 2) : (dy < 0 ? 3 : 0);
+        trail.push({ x: P.x, y: P.y }); if (trail.length > 400) trail.shift();
+      } else P.walk = 0;
+      function blocked(x, y) {
+        for (const r of cfg.solids || []) if (x + 5 > r.x && x - 5 < r.x + r.w && y > r.y && y - 6 < r.y + r.h) return true;
+        for (const n of cfg.npcs || []) if (n.solid !== false && Math.hypot(x - n.x, (y - n.y) * 1.4) < 12) return true;
+        return cfg.blocked ? cfg.blocked(x, y, sc) : false;
+      }
+      if (actPressed) {
+        let best = null, bd = 38;
+        for (const n of cfg.npcs || []) { const d = Math.hypot(P.x - n.x, (P.y - n.y) * 1.2); if (d < bd && n.talk !== false) { bd = d; best = n; } }
+        if (best) {
+          const ax = P.x - best.x, ay = P.y - best.y;
+          best.dir = Math.abs(ax) > Math.abs(ay) ? (ax < 0 ? 2 : 1) : (ay < 0 ? 0 : 3);
+          sfx.blip(); best.talked = true;
+          if (best.onTalk) best.onTalk(sc, best); else if (best.lines) say(best.lines, () => { if (best.onDone) best.onDone(sc, best); });
+        }
+      }
+      for (const it of cfg.items || []) if (!it.got && Math.hypot(P.x - it.x, P.y - it.y) < 16) { it.got = true; sfx.good(); burst(it.x, it.y, 8, 'c'); if (cfg.onItem) cfg.onItem(it, sc); }
+      if (cfg.update) cfg.update(dt, sc);
+    },
+    draw() {
+      cfg.bg(sc);
+      for (const it of cfg.items || []) if (!it.got) { const b = Math.sin(sc.t * 4 + it.x) * 2; if (cfg.drawItem) cfg.drawItem(it, b, sc); }
+      const ents = [];
+      for (const n of cfg.npcs || []) ents.push({ y: n.y, f: () => { person(n.x, n.y, n.look, n.dir || 0, 0); if (n.talked && cfg.checks) txt('✓', n.x - 4, n.y - 52, { color: '#9be37a', size: 13 }); } });
+      if (cfg.follower) { const tr = trail.length > 30 ? trail[trail.length - 30] : { x: P.x, y: P.y + 14 }; ents.push({ y: tr.y, f: () => person(tr.x, tr.y, cfg.follower, 0, P.walk, false) }); }
+      ents.push({ y: P.y, f: () => person(P.x, P.y, cfg.me || JAKE, P.dir, P.walk) });
+      ents.sort((a, b) => a.y - b.y).forEach(e => e.f());
+      if (cfg.fg) cfg.fg(sc);
+      for (const n of cfg.npcs || []) {
+        if (n.talk === false) continue;
+        const d = Math.hypot(P.x - n.x, (P.y - n.y) * 1.2);
+        if (d < 40 && !dlg.cur) {
+          const label = n.name || ''; ctx.font = 'bold 12px "Courier New",monospace';
+          const w = ctx.measureText(label).width + 16;
+          panel(n.x - w / 2, n.y - 74, w, 22, 'rgba(16,24,40,.9)'); txt(label, n.x, n.y - 71, { align: 'center', size: 12 });
+          txt('SPACE', n.x, n.y - 50, { align: 'center', size: 10, color: '#f5d98a' });
+        }
+      }
+      partsDraw();
+      if (cfg.hud) cfg.hud(sc);
+      if (msgT > 0) { const ls = wrap(msg, 440, 14); const h = ls.length * 18 + 14; panel(W / 2 - 230, 38, 460, h); ls.forEach((l, i) => txt(l, W / 2, 45 + i * 18, { align: 'center', size: 14 })); }
+    }
+  };
+  return sc;
+}
+function hudBar(label, a, b) {
+  panel(8, 6, 250, 26, 'rgba(16,24,40,.85)'); txt(label + ' ' + a + '/' + b, 16, 12, { size: 13 });
+}
+
+/* ---------- CATCH ENGINE (texts, ice cream, canoe) ---------- */
+function makeCatch(cfg) {
+  const fresh = () => ({ x: W / 2, y: cfg.py || H - 52, items: [], score: 0, lives: cfg.lives || 5, t: 0, spawn: 1, feed: [], stack: [], flash: 0, state: 'play' });
+  let S = fresh();
+  return {
+    update(dt, talking) {
+      partsUpdate(dt);
+      if (talking || S.state !== 'play') return;
+      S.t += dt; S.flash = Math.max(0, S.flash - dt);
+      S.x = clamp(S.x + ((inR() ? 1 : 0) - (inL() ? 1 : 0)) * cfg.speed * dt, cfg.minX || 30, cfg.maxX || W - 30);
+      S.spawn -= dt;
+      if (S.spawn <= 0) {
+        S.spawn = cfg.rate * rnd(.75, 1.25);
+        const bad = Math.random() < cfg.badChance;
+        const pool = bad ? cfg.bad : cfg.good;
+        S.items.push({ x: rnd(cfg.minX || 30, cfg.maxX || W - 30), y: -20, vy: cfg.fall * rnd(.85, 1.2), kind: pool[(Math.random() * pool.length) | 0], bad, r: rnd(0, 6), n: Math.random() });
+      }
+      const cy = cfg.catchY ? cfg.catchY(S) : S.y;
+      for (const it of S.items) {
+        it.y += it.vy * dt;
+        if (!it.dead && Math.abs(it.x - S.x) < cfg.catchW && it.y > cy - 14 && it.y < cy + 16) {
+          it.dead = true;
+          if (it.bad) { S.lives--; S.flash = .3; sfx.bad(); if (cfg.onBad) cfg.onBad(it, S); }
+          else { S.score++; sfx.good(); burst(it.x, it.y, 6, 'c'); if (cfg.onGood) cfg.onGood(it, S); }
+        }
+      }
+      S.items = S.items.filter(i => !i.dead && i.y < H + 30);
+      if (S.score >= cfg.goal) { S.state = 'won'; sfx.win(); burst(S.x, S.y - 30, 40, 'heart'); say(cfg.winLines, () => cfg.done()); }
+      else if (S.lives <= 0) { S.state = 'lost'; say([['', cfg.loseText || 'Oh no! Take a breath and try that again.']], () => { S = fresh(); }); }
+    },
+    draw() {
+      cfg.bg(S.t, S);
+      for (const it of S.items) cfg.drawItem(it, S.t);
+      cfg.drawPlayer(S.x, S.y, S.t, S);
+      if (cfg.feed) cfg.feed(S);
+      panel(8, 6, 300, 26); txt(cfg.label + ' ' + Math.min(S.score, cfg.goal) + '/' + cfg.goal, 16, 12, { size: 13 });
+      for (let i = 0; i < (cfg.lives || 5); i++) heart(W - 24 - i * 22, 14, 7, i < S.lives ? '#ff6b8b' : '#4a3a4a');
+      if (S.flash > 0) { ctx.fillStyle = 'rgba(255,60,60,' + (S.flash) + ')'; ctx.fillRect(0, 0, W, H); }
+      partsDraw();
+    }
+  };
+}
+
+/* =====================================================================
+   CHAPTER 1: FRIENDS FIRST  (Drake University, Fall 2020)
+   ===================================================================== */
+function chapter1(done) {
+  const stu = (x, y, hair, outfit, name, text) => ({ x, y, name, look: look({ hair, outfit, skin: SK[(x / 40 | 0) % 4] }), lines: [[name, text]] });
+  const npcs = [
+    stu(210, 232, '#2a2018', '#b33', 'Student', 'Second week of classes! Somebody said Campus Fellowship is hosting an event. Look for the flyers around campus!'),
+    stu(440, 236, '#c9a05a', '#3a8a5a', 'Student', 'I saw a flyer by the grass near the library. Free community, free snacks. Sold!'),
+    stu(110, 330, '#4a2a1a', '#8a5aa0', 'Student', 'Drake is huge when you first get here. Everyone is looking for their people.'),
+    { x: 525, y: 160, name: 'Julia', look: look({ skin: SK[1], hair: '#6b3f22', outfit: '#d98ba0', style: 'long', dress: true }), dir: 0, onTalk(sc) {
+      if (sc.flags.flyers < 3) { say([['Julia', 'Hi there! Are you here for Campus Fellowship? You can look around first. The flyers are scattered across campus!']]); return; }
+      say([
+        ['Julia', "Hi! Is this your first Campus Fellowship? I'm Julia. I'm a sophomore."],
+        ['Jake', "I'm Jake. It's my second week at Drake, and I don't really know anyone yet."],
+        ['Julia', 'Well, now you know a few of us! Come join our Bible study group.'],
+        ['', 'Jake and Julia ended up in the same Bible study group that fall. Neither of them knew yet that this was the start of the best story.']
+      ], () => { burst(525, 120, 20, 'heart'); setTimeout(done, 900); });
+    } },
+    { x: 480, y: 172, name: 'Friend', look: look({ hair: '#222', outfit: '#5a7fb0' }), dir: 2, lines: [['Friend', 'Welcome! Grab a seat in the circle.']] },
+    { x: 572, y: 176, name: 'Friend', look: look({ hair: '#a07a3a', outfit: '#6aa07a', style: 'long' }), dir: 1, lines: [['Friend', 'We have snacks too. Just saying.']] }
+  ];
+  const items = [{ x: 120, y: 270 }, { x: 420, y: 306 }, { x: 262, y: 172 }];
+  const cfg = {
+    start: [320, 360], npcs, items, top: 56,
+    solids: [{ x: 30, y: 44, w: 200, h: 86 }, { x: 262, y: 50, w: 120, h: 70 }, { x: 440, y: 60, w: 12, h: 20 }, { x: 70, y: 292, w: 20, h: 20 }, { x: 560, y: 310, w: 20, h: 20 }, { x: 160, y: 170, w: 20, h: 18 }],
+    bg(sc) {
+      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#8ccf7a'); g.addColorStop(1, '#6fb263'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      rect(0, 200, W, 50, '#e5d6ae'); rect(296, 120, 56, 280, '#e5d6ae');
+      rect(30, 44, 200, 86, '#a65b4b'); rect(30, 44, 200, 14, '#7b3f33');
+      for (let i = 0; i < 6; i++) for (let j = 0; j < 2; j++) rect(46 + i * 30, 68 + j * 28, 14, 16, '#f3e3a1');
+      txt('DRAKE UNIVERSITY', 130, 48, { align: 'center', size: 11, color: '#f5d98a', shadow: false });
+      rect(262, 50, 120, 70, '#8b98ad'); rect(262, 50, 120, 10, '#66738a'); for (let i = 0; i < 4; i++) rect(274 + i * 26, 70, 12, 30, '#dfe9f7');
+      ctx.fillStyle = '#d95c5c'; for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.moveTo(440 + i * 28, 62); ctx.lineTo(468 + i * 28, 62); ctx.lineTo(454 + i * 28, 90); ctx.fill(); ctx.fillStyle = i % 2 ? '#d95c5c' : '#fff6e6'; }
+      rect(440, 62, 168, 6, '#fff6e6'); rect(440, 62, 4, 80, '#8a6a3a'); rect(604, 62, 4, 80, '#8a6a3a');
+      txt('CAMPUS FELLOWSHIP', 524, 100, { align: 'center', size: 11, color: '#fff', shadow: true });
+      circle(524, 168, 36, 'rgba(255,255,255,.25)');
+      for (const r of cfg.solids.slice(3)) { rect(r.x + 6, r.y + 10, 8, 14, '#6b4a2a'); circle(r.x + 10, r.y + 6, 16, '#3f8c4a'); circle(r.x + 4, r.y + 12, 11, '#4fa05a'); }
+    },
+    drawItem(it, b) { rect(it.x - 7, it.y - 9 + b, 14, 18, '#fff'); rect(it.x - 5, it.y - 6 + b, 10, 2, '#d95c5c'); rect(it.x - 5, it.y - 2 + b, 10, 2, '#7a8aa0'); rect(it.x - 5, it.y + 2 + b, 7, 2, '#7a8aa0'); },
+    onItem(it, sc) { sc.flags.flyers++; if (sc.flags.flyers < 3) sc.toast('Flyer found! ' + sc.flags.flyers + '/3. "Campus Fellowship: everyone welcome!"', 3); else sc.toast('All flyers found! Head to the red tent at the top right.', 4); },
+    hud(sc) { hudBar('Flyers', sc.flags.flyers, 3); },
+    me: JAKE
+  };
+  const sc = makeWalk(cfg); sc.flags.flyers = 0;
+  sc.enter = () => say([['Jake', "My second week at Drake. I keep hearing about something called Campus Fellowship. Let's find the flyers."], ['', 'Use the arrow keys / WASD to walk. SPACE talks to people.']]);
+  return sc;
+}
+
+/* =====================================================================
+   CHAPTER 2: TEXTING UPDATES  (Lord of the Rings, winter 2024-25)
+   ===================================================================== */
+function chapter2(done) {
+  const titles = ['The Fellowship of the Ring', 'The Two Towers', 'The Return of the King'];
+  const jakeReplies = ['Julia!! What did you think?!', 'Okay but have you watched the movies yet?', 'Extended editions only. Always.', 'I am so happy you are reading these.'];
+  let bookN = 0;
+  const cfg = {
+    label: 'Texts sent', goal: 12, lives: 5, speed: 260, rate: .8, fall: 135, badChance: .22, catchW: 32,
+    good: ['book', 'book', 'ext'], bad: ['theatrical'],
+    bg(t) {
+      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#2c3e50'); g.addColorStop(1, '#43556b'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      rect(0, 330, W, 70, '#6b4a2f'); rect(0, 326, W, 6, '#8a6340');
+      for (let i = 0; i < 40; i++) { ctx.globalAlpha = .7; rect((i * 97 + t * 20 * (1 + i % 3)) % W, (i * 53 + t * 30) % 300, 2, 2, '#fff'); } ctx.globalAlpha = 1;
+      rect(470, 80, 130, 180, '#3a2b1e'); for (let r = 0; r < 4; r++) for (let i = 0; i < 9; i++) rect(476 + i * 13, 90 + r * 42, 9, 34, ['#8a3b3b', '#3b6a8a', '#8a7a3b', '#4a8a5a'][(i + r) % 4]);
+    },
+    drawItem(it, t) {
+      if (it.kind === 'book') { rect(it.x - 10, it.y - 12, 20, 24, '#7a4a2a'); rect(it.x - 10, it.y - 12, 4, 24, '#4a2a14'); rect(it.x - 3, it.y - 6, 10, 3, '#f5d98a'); }
+      else if (it.kind === 'ext') { circle(it.x, it.y, 14, '#f5d98a'); circle(it.x, it.y, 4, '#8a6a1a'); txt('EXT', it.x, it.y - 24, { align: 'center', size: 10, color: '#f5d98a' }); }
+      else { circle(it.x, it.y, 14, '#8a8f99'); ctx.strokeStyle = '#d33'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(it.x - 9, it.y - 9); ctx.lineTo(it.x + 9, it.y + 9); ctx.moveTo(it.x + 9, it.y - 9); ctx.lineTo(it.x - 9, it.y + 9); ctx.stroke(); txt('THEATRICAL', it.x, it.y - 26, { align: 'center', size: 9, color: '#ff9a9a' }); }
+    },
+    drawPlayer(x, y, t, S) { person(x, y + 16, JULIA, 3, 0); rect(x - 14, y - 16, 28, 5, '#e8d9cf'); rect(x - 14, y - 16, 28, 2, '#fff'); },
+    onGood(it, S) {
+      let m = it.kind === 'ext' ? 'Watching the EXTENDED edition tonight!' : (bookN < 3 ? 'Just finished ' + titles[bookN++] + '!' : 'Starting the next movie after the book!');
+      S.feed.push({ who: 'Julia', t: m }); S.feed.push({ who: 'Jake', t: it.kind === 'ext' ? 'Now THAT is the only way to go.' : jakeReplies[S.score % jakeReplies.length] });
+      while (S.feed.length > 4) S.feed.shift();
+    },
+    onBad(it, S) { S.feed.push({ who: 'Jake', t: 'The theatrical cut?? Julia. Please.' }); while (S.feed.length > 4) S.feed.shift(); },
+    feed(S) {
+      let y = 40;
+      for (const m of S.feed) {
+        const jk = m.who === 'Jake'; const w = Math.min(280, m.t.length * 7.2 + 20);
+        ctx.globalAlpha = .92; ctx.fillStyle = jk ? '#e9e9ee' : '#4a9bff'; ctx.fillRect(jk ? 10 : 330 - w + 10, y, w, 22); ctx.globalAlpha = 1;
+        txt(m.t, (jk ? 20 : 340 - w + 10), y + 4, { size: 11, color: jk ? '#222' : '#fff', shadow: false }); y += 26;
+      }
+    },
+    winLines: [['Julia', "(texting) Finished the books! Now I'm watching the extended editions. Obviously."], ['Jake', "She's reading them for the first time, and she keeps telling me about it. I think I'm going to ask her out."], ['', "Julia had asked for the Lord of the Rings books for Christmas because Jake spoke so highly of them. Her updates helped Jake decide, in January 2025, to ask her out."]],
+    done
+  };
+  const sc = makeCatch(cfg);
+  sc.enter = () => say([['Julia', "I got the Lord of the Rings books for Christmas! I should text Jake updates. He'll love it."], ['', 'Catch books and EXTENDED edition discs with Julia. Avoid the theatrical cut! Move with ← →.']]);
+  return sc;
+}
+
+/* =====================================================================
+   CHAPTER 3: FIRST DATE (April 24, 2025): tofu + ice cream
+   ===================================================================== */
+function chapter3(done) {
+  // ---- part A: Thai Flavors tofu timing
+  const T = { bite: 0, hits: 0, cur: 0, dir: 1, zone: 100, t: 0, busy: false, face: 0 };
+  const bar = { x: 170, y: 255, w: 300, h: 24 };
+  function newZone() { T.zone = rnd(40, bar.w - 100); }
+  newZone();
+  const tofu = {
+    update(dt, talking) {
+      partsUpdate(dt); T.t += dt;
+      if (talking) return;
+      T.cur += T.dir * (230 + T.bite * 50) * dt; if (T.cur > bar.w) { T.cur = bar.w; T.dir = -1; } if (T.cur < 0) { T.cur = 0; T.dir = 1; }
+      if (actPressed && !T.busy) {
+        T.busy = true; const hit = T.cur > T.zone && T.cur < T.zone + 70; T.bite++;
+        if (hit) { T.hits++; sfx.good(); burst(320, 200, 12, 'heart'); } else sfx.bad();
+        const lines = hit ? [['Jake', 'Okay... wait. This is actually good!']] : [['Jake', "Texture: interesting. Still a good sport. I'm trying it!"]];
+        if (T.bite >= 3) {
+          lines.push(['Julia', T.hits >= 2 ? 'You are a natural at tofu, Jake!' : 'Brave first-timer. I am impressed!']);
+          lines.push(['', 'Their first date, April 24, 2025: Thai Flavors (where Jake tried tofu for the first time!) and then ice cream at Home Sweet Cone.']);
+          say(lines, () => { fadeTo(() => go(iceCream())); });
+        } else say(lines, () => { T.busy = false; newZone(); });
+      }
+    },
+    draw() {
+      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#5a2a2a'); g.addColorStop(1, '#8a4a3a'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      rect(0, 0, W, 60, '#3a1a1a'); txt('THAI FLAVORS', W / 2, 18, { align: 'center', size: 24, color: '#f5d98a' });
+      for (let i = 0; i < 8; i++) { circle(40 + i * 80, 80, 12, '#d95c5c'); rect(39 + i * 80, 60, 2, 8, '#f5d98a'); }
+      rect(100, 160, 440, 20, '#6b3f22'); rect(130, 180, 12, 90, '#4a2a14'); rect(498, 180, 12, 90, '#4a2a14');
+      person(210, 168, JULIA, 0, 0, true); person(430, 168, JAKE, 0, 0, true);
+      circle(320, 158, 36, '#fff6e6'); circle(320, 158, 28, '#f0e2c4');
+      for (let i = 0; i < 4; i++) rect(300 + (i % 2) * 22, 140 + (i >> 1) * 22, 16, 16, '#f2d98a');
+      txt('Jake\'s first tofu!  Press SPACE when the marker is in the green zone.', W / 2, 205, { align: 'center', size: 13 });
+      panel(bar.x - 4, bar.y - 4, bar.w + 8, bar.h + 8, '#2a1a1a'); rect(bar.x, bar.y, bar.w, bar.h, '#4a3a3a'); rect(bar.x + T.zone, bar.y, 70, bar.h, '#6bd96b');
+      rect(bar.x + T.cur - 3, bar.y - 8, 6, bar.h + 16, '#fff');
+      txt('Bite ' + Math.min(T.bite + 1, 3) + '/3', W / 2, 300, { align: 'center', size: 14 });
+      partsDraw();
+    },
+    enter() { say([['', 'April 21, 2025. Jake called Julia to ask if he could see her in person. The next day, he asked her out. Julia said: "I\'m down."'], ['', 'April 24, 2025: the first date. Thai Flavors!']]); }
+  };
+  // ---- part B: Home Sweet Cone
+  function iceCream() {
+    const flavors = ['#ffb3c7', '#fff1c1', '#b98a5b', '#a8e6cf', '#d4b5ff'];
+    const cfg = {
+      label: 'Scoops', goal: 8, lives: 5, speed: 250, rate: .75, fall: 130, badChance: .2, catchW: 24, py: H - 40,
+      catchY: S => S.y - 14 - S.stack.length * 13 - 6,
+      good: [0, 1, 2, 3, 4], bad: ['pepper'],
+      bg(t) {
+        ctx.fillStyle = '#ffd9e6'; ctx.fillRect(0, 0, W, H); for (let i = 0; i < 16; i++) rect(i * 40, 0, 20, 60, '#fff'); rect(0, 56, W, 6, '#ff8fb0');
+        txt('HOME SWEET CONE', W / 2, 14, { align: 'center', size: 20, color: '#c2476e', shadow: false });
+        rect(0, 350, W, 50, '#f5c4d6'); for (let i = 0; i < 20; i++) rect(i * 32 + (i % 2) * 0, 350, 16, 50, '#fbd6e3');
+      },
+      drawItem(it) { if (it.kind === 'pepper') { ctx.fillStyle = '#d63a2a'; ctx.beginPath(); ctx.ellipse(it.x, it.y, 6, 13, .5, 0, 7); ctx.fill(); rect(it.x - 6, it.y - 14, 5, 5, '#3a8a3a'); txt('SPICY', it.x, it.y - 28, { align: 'center', size: 9, color: '#a02020', shadow: false }); } else circle(it.x, it.y, 13, flavors[it.kind]); },
+      drawPlayer(x, y, t, S) { ctx.fillStyle = '#d9a05a'; ctx.beginPath(); ctx.moveTo(x - 14, y - 12); ctx.lineTo(x + 14, y - 12); ctx.lineTo(x, y + 22); ctx.fill(); S.stack.forEach((c, i) => circle(x + (i % 2 ? 1 : -1), y - 20 - i * 13, 14, c)); },
+      onGood(it, S) { S.stack.push(flavors[it.kind]); },
+      winLines: [['Julia', 'A date with Thai food AND ice cream? 10 out of 10.'], ['Jake', 'Even the tofu?'], ['Julia', 'Even the tofu.'], ['', 'After a month of dates, they decided to officially start dating.']],
+      done
+    };
+    const sc = makeCatch(cfg);
+    sc.enter = () => say([['', 'Next stop: Home Sweet Cone! Stack 8 scoops on the cone. Dodge the spicy peppers!']]);
+    return sc;
+  }
+  return tofu;
+}
+
+/* =====================================================================
+   CHAPTER 4: CANOEING, ANIME, AND MUSIC WITH LYRICS
+   ===================================================================== */
+function chapter4(done) {
+  const cfg = {
+    label: 'Adventure points', goal: 16, lives: 5, speed: 250, rate: .6, fall: 170, badChance: .3, catchW: 26, minX: 70, maxX: W - 70, py: H - 50,
+    good: ['star', 'note'], bad: ['rock', 'log'],
+    bg(t) {
+      ctx.fillStyle = '#3d8fc4'; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < 14; i++) { ctx.globalAlpha = .25; rect(80 + (i * 83) % 480, (i * 61 + t * 90) % (H + 20) - 10, 40, 3, '#fff'); } ctx.globalAlpha = 1;
+      rect(0, 0, 50, H, '#6bb066'); rect(W - 50, 0, 50, H, '#6bb066'); rect(46, 0, 6, H, '#d9c28a'); rect(W - 52, 0, 6, H, '#d9c28a');
+      for (let i = 0; i < 7; i++) { const yy = ((i * 70 + t * 90) % (H + 70)) - 40; circle(22, yy, 18, '#3f8c4a'); circle(W - 22, (yy + 35) % H, 18, '#3f8c4a'); }
+    },
+    drawItem(it, t) {
+      if (it.kind === 'star') { star(it.x, it.y, 14, '#ffd84a'); txt('ANIME', it.x, it.y - 28, { align: 'center', size: 9, color: '#fff' }); }
+      else if (it.kind === 'note') { txt('♪', it.x - 6, it.y - 16, { size: 30, color: '#ffe9ff' }); txt('LYRICS', it.x, it.y + 12, { align: 'center', size: 9, color: '#fff' }); }
+      else if (it.kind === 'rock') { ctx.fillStyle = '#7a7f88'; ctx.beginPath(); ctx.ellipse(it.x, it.y, 16, 11, 0, 0, 7); ctx.fill(); rect(it.x - 6, it.y - 4, 8, 3, '#9aa0aa'); }
+      else { rect(it.x - 20, it.y - 6, 40, 12, '#6b4a2a'); rect(it.x - 20, it.y - 6, 40, 3, '#8a6a3a'); }
+    },
+    drawPlayer(x, y, t) {
+      const bob = Math.sin(t * 5) * 1.5; person(x - 8, y + 6 + bob, JULIA, 3, 0, true); person(x + 8, y + 6 + bob, JAKE, 3, 0, true);
+      ctx.fillStyle = '#c0632f'; ctx.beginPath(); ctx.moveTo(x - 20, y - 4 + bob); ctx.lineTo(x + 20, y - 4 + bob); ctx.lineTo(x + 12, y + 22 + bob); ctx.lineTo(x - 12, y + 22 + bob); ctx.fill(); rect(x - 20, y - 5 + bob, 40, 3, '#e08a52');
+    },
+    winLines: [['Jake', 'Julia, I have to show you this anime. Trust me.'], ['Julia', 'Only if you listen to my playlist. Music with LYRICS, Jake.'], ['', 'They went canoeing, spent hours and hours talking, and had lots of serious conversations. Their goal: figure out if God was leading them toward marriage. It became clearer and clearer that He was.']],
+    done
+  };
+  const sc = makeCatch(cfg);
+  sc.enter = () => say([['', 'Summer 2025. Canoe time! Collect anime stars and songs with lyrics. Dodge rocks and logs.']]);
+  return sc;
+}
+
+/* =====================================================================
+   CHAPTER 5: BLUE HERON LAKE: always counterclockwise
+   ===================================================================== */
+function chapter5(done) {
+  const C = { x: 320, y: 218 }, LR = { x: 125, y: 72 }, PR = { x: 172, y: 112 };
+  const cps = [330, 30, 90, 150, 210].map(a => { const r = a * Math.PI / 180; return { x: C.x + PR.x * Math.cos(r), y: C.y - PR.y * Math.sin(r), a }; });
+  const pier = { x: 190, y: 210, w: 90, h: 16 }, tip = { x: 272, y: 224 };
+  let next = 0, cool = 0, proposed = false;
+  const cfg = {
+    start: [C.x, C.y + PR.y + 4], top: 50, me: JAKE, follower: JULIA, npcs: [],
+    solids: [], items: [],
+    blocked(x, y) {
+      const inPier = x > pier.x - 2 && x < pier.x + pier.w + 2 && y > pier.y && y < pier.y + pier.h + 12;
+      if (inPier) return false;
+      const v = ((x - C.x) / LR.x) ** 2 + (((y - 6) - C.y) / LR.y) ** 2; return v < 1.05;
+    },
+    bg(sc) {
+      ctx.fillStyle = '#7fc46c'; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = '#e0cfa0'; ctx.lineWidth = 34; ctx.beginPath(); ctx.ellipse(C.x, C.y, PR.x, PR.y, 0, 0, 7); ctx.stroke();
+      ctx.fillStyle = '#4aa3d9'; ctx.beginPath(); ctx.ellipse(C.x, C.y, LR.x, LR.y, 0, 0, 7); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.lineWidth = 2; for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.ellipse(C.x + Math.sin(sc.t + i) * 10, C.y - 30 + i * 16, 22, 3, 0, 0, 7); ctx.stroke(); }
+      if (next >= 5) { rect(pier.x, pier.y, pier.w, pier.h, '#9a6b3a'); for (let i = 0; i < 9; i++) rect(pier.x + i * 10, pier.y, 2, pier.h, '#7a5228'); }
+      txt('BLUE HERON LAKE', W / 2, 12, { align: 'center', size: 14, color: '#fff' });
+      for (const t of [[40, 90], [580, 100], [50, 330], [590, 330], [320, 60], [250, 372]]) { rect(t[0] - 3, t[1], 6, 16, '#6b4a2a'); circle(t[0], t[1] - 4, 20, '#3f8c4a'); circle(t[0] - 8, t[1] + 2, 13, '#4fa05a'); }
+      cps.forEach((c, i) => {
+        const done = i < next, cur = i === next; const p = cur ? 1 + Math.sin(sc.t * 6) * .2 : 1;
+        circle(c.x, c.y, 13 * p, done ? 'rgba(255,255,255,.2)' : cur ? '#ffe36b' : 'rgba(255,255,255,.45)');
+        if (!done) { circle(c.x - 4, c.y - 2, 3, '#ff8fb0'); circle(c.x + 4, c.y + 2, 3, '#c79bff'); circle(c.x, c.y + 4, 3, '#fff'); } else txt('✓', c.x - 4, c.y - 7, { size: 14, color: '#2a6a2a', shadow: false });
+      });
+      if (next >= 5) { const p = 1 + Math.sin(sc.t * 6) * .25; circle(tip.x, tip.y, 10 * p, '#ffe36b'); txt('→ pier', 195, 190, { size: 11, color: '#fff' }); }
+    },
+    update(dt, sc) {
+      cool = Math.max(0, cool - dt);
+      const P = sc.P;
+      if (next < 5) cps.forEach((c, i) => {
+        if (Math.hypot(P.x - c.x, P.y - c.y) < 18) {
+          if (i === next) { next++; sfx.good(); burst(c.x, c.y, 10, 'heart'); if (next < 5) sc.toast('Counterclockwise! Checkpoint ' + next + '/5.', 2.5); else sc.toast('Jake asks to go down a different part of the trail. Follow the glowing pier!', 5); }
+          else if (i > next && cool <= 0 && !(cps[i].done)) { cool = 4; sfx.bad(); sc.toast('Julia: "Wrong way! We ALWAYS walk counterclockwise!"', 3.5); }
+        }
+      });
+      if (next >= 5 && !proposed && Math.hypot(P.x - tip.x, P.y - tip.y) < 20) {
+        proposed = true; sc.frozen = true; P.dir = 1;
+        say([
+          ['Julia', 'Jake, the path ends right at the water. This is so beautiful.'],
+          ['Jake', 'Julia, you love walking around this lake, and so do I. This place has seen so many of our talks.'],
+          ['Jake', 'Julia Buchholz... will you marry me?'],
+          ['Julia', 'YES!'],
+          ['', 'After about four years of friendship and dating, Jake proposed at Blue Heron Lake in West Des Moines.']
+        ], () => { for (let i = 0; i < 5; i++) setTimeout(() => burst(tip.x, tip.y - 20, 30, 'heart'), i * 250); sfx.win(); setTimeout(done, 2200); });
+      }
+    },
+    hud(sc) { panel(8, 6, 250, 26); txt(next < 5 ? 'Loop checkpoints ' + next + '/5' : 'Find the pier!', 16, 12, { size: 13 }); }
+  };
+  cfg.npcs = [];
+  const sc = makeWalk(cfg);
+  sc.enter = () => say([['Julia', 'Want to walk around Blue Heron Lake? It is a three-mile loop. You know the rule.'], ['Jake', 'Counterclockwise. Always.'], ['', 'Walk the loop COUNTERCLOCKWISE. Start toward the right side, then up and around.']]);
+  return sc;
+}
+
+/* =====================================================================
+   CHAPTER 6: THE WEDDING (Emerald Hills Events, Promise City, Iowa)
+   ===================================================================== */
+const PARTY = [
+  // bride's side (left)
+  ['Lily Langreck', 'Matron of Honor', 'Sister of the bride', 'Lily', "I'm Julia's sister, and I get to be Matron of Honor. Jake, you are getting an amazing wife."],
+  ['Josie Buchholz', 'Maid of Honor', 'Sister of the bride', 'Josie', "Maid of Honor reporting! Julia's sister here. I have been practicing my toast."],
+  ['Lilly Perez', 'Bridesmaid', 'Niece of the groom', 'Lilly', "Jake is my uncle, and now Julia is my aunt! Best upgrade ever."],
+  ['Miranda DeLara', 'Bridesmaid', 'Friend of the bride', 'Miranda', "Fun fact: nobody walks around Blue Heron Lake clockwise. Ever."],
+  ['Tawnee Henze', 'Bridesmaid', 'Friend of the bride', 'Tawnee', "I heard Jake tried tofu for the first time on their first date. Brave. Very brave."],
+  ['Julia Gadberry', 'Bridesmaid', 'Friend of the bride', 'Julia G.', "Another Julia! Don't worry, there is only one bride today."],
+  ['Megan Kenney', 'Bridesmaid', 'Friend of the bride', 'Megan', "Church, community groups, and now a wedding. I love this family of friends."],
+  ['Emily Stadler', 'Bridesmaid', 'Friend of the bride', 'Emily', "Is it weird that I'm already tearing up? Because I'm already tearing up."],
+  ['Grace Hegard', 'Bridesmaid', 'Friend of the bride', 'Grace', "Extended edition ceremony, please. No theatrical cut today!"],
+  // groom's side (right)
+  ['Ransom Coffeen', 'Best Man', 'Friend of the groom', 'Ransom', "Best Man Ransom Coffeen, at your service. Rings secured. Speech: mostly memorized."],
+  ['Austin Langreck', 'Groomsman', 'Brother-in-law of the bride', 'Austin', "Welcome to the family, Jake. The snacks are great. The opinions are strong."],
+  ['Tommy Musial', 'Groomsman', 'Nephew of the groom', 'Tommy', "Jake is my uncle! Cool uncle status: confirmed. And now he's married!"],
+  ['Jordan DeLara', 'Groomsman', 'Friend of the groom', 'Jordan', "Jake introduced Julia to anime. She introduced him to music with lyrics. Fair trade."],
+  ['Kyle Bachara', 'Groomsman', 'Friend of the groom', 'Kyle', "Jake called to ask if he could see her the next day. Her answer? 'I'm down.' Legendary."],
+  ['Dylan Gadberry', 'Groomsman', 'Friend of the groom', 'Dylan', "Friends for years first. That's what I call patience."],
+  ['Parker Schlick', 'Groomsman', 'Friend of the groom', 'Parker', "I just want to say that Home Sweet Cone deserves a thank-you note."],
+  ['Josh Bruntz', 'Groomsman', 'Friend of the groom', 'Josh', "A proposal on a trail by the water. Jake, that's a plot twist worthy of a movie."],
+  ['Henry Ziegler', 'Groomsman', 'Friend of the groom', 'Henry', "Two friends, tons of shared friends, one big wedding. I love it."]
+];
+const HAIR = ['#2a2018', '#6b4423', '#c9a05a', '#8a4a2a', '#1c1c1c', '#a07a3a', '#5a3a22', '#d9b36a', '#3a2a1a'];
+function chapter6(done) {
+  const npcs = [];
+  const BM = '#7d5a8c', GM = '#2f3b52';
+  PARTY.forEach((p, i) => {
+    const left = i < 9, k = left ? i : i - 9, col = k % 3, row = (k / 3) | 0;
+    const x = left ? 130 + col * 52 : 410 + col * 52, y = 165 + row * 58 + (col % 2) * 8;
+    npcs.push({ x, y, name: p[3], dir: left ? 2 : 1,
+      look: left ? look({ skin: SK[(i * 3) % 4], hair: HAIR[i % 9], outfit: BM, style: i % 4 === 0 ? 'bun' : 'long', dress: true }) : look({ skin: SK[(i * 5) % 4], hair: HAIR[(i + 3) % 9], outfit: GM, pants: '#232a3c', tie: '#9bb6d9', glasses: i % 4 === 1 }),
+      lines: [[p[0] + ' · ' + p[1], p[4]], ['', p[2] + '.']], full: p });
+  });
+  const julia = { x: 320, y: 98, name: 'Julia', look: JULIA_BRIDE, dir: 0, onTalk(sc) {
+    const met = npcs.filter(n => n.full && n.talked).length;
+    if (met < 18) { say([['Julia', "Hi, Jake! Before we begin, say hello to our wedding party. They're so excited. (" + met + "/18)"]]); return; }
+    say([
+      ['', 'The music begins. Jake and Julia face each other at the altar at Emerald Hills Events in Promise City, Iowa.'],
+      ['Julia', 'Jake, from our first Bible study to this moment, I would choose you again every single time.'],
+      ['Jake', 'Julia, you are my best friend. I cannot wait to spend the rest of our lives together.'],
+      ['', '"Our aim in marriage is to glorify God." That is how Jake and Julia describe their marriage on their wedding website.'],
+      ['Officiant', 'By the love of God and the joy of these friends and family, I now pronounce you husband and wife!'],
+      ['', 'You may kiss the bride!']
+    ], () => { sfx.win(); for (let i = 0; i < 8; i++) setTimeout(() => burst(rnd(150, 500), rnd(80, 200), 40, i % 2 ? 'heart' : 'c'), i * 220); setTimeout(done, 2600); });
+  } };
+  npcs.push(julia, { x: 366, y: 94, name: 'Officiant', look: look({ hair: '#d8d8d8', outfit: '#3a3a4a', pants: '#2a2a35', skin: SK[1] }), dir: 0, lines: [['Officiant', 'Take your time. Meet the wedding party, then come see your bride!']] });
+  const cfg = {
+    start: [320, 372], npcs, top: 60, checks: true, me: JAKE_TUX,
+    solids: [{ x: 238, y: 40, w: 164, h: 24 }],
+    bg(sc) {
+      ctx.fillStyle = '#c8a46e'; ctx.fillRect(0, 0, W, H);
+      for (let i = 0; i < 40; i++) rect(0, 60 + i * 9, W, 1, 'rgba(0,0,0,.06)');
+      rect(0, 0, W, 60, '#efe5d2'); rect(0, 56, W, 5, '#b89868');
+      for (let i = 0; i < 4; i++) { rect(60 + i * 140, 12, 56, 38, '#9ad0ff'); rect(60 + i * 140, 30, 56, 2, '#fff'); rect(86 + i * 140, 12, 2, 38, '#fff'); }
+      for (let i = 0; i < 16; i++) { const lx = 20 + i * 40, ly = 6 + Math.sin(i * 1.3) * 4 + 10; circle(lx, ly, 3, '#ffe9a0'); }
+      rect(285, 60, 70, 340, '#f0e2d6'); rect(285, 60, 3, 340, '#d9c0b0'); rect(352, 60, 3, 340, '#d9c0b0');
+      rect(240, 40, 160, 22, '#b98b5a'); rect(240, 40, 160, 4, '#d3a874');
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(320, 86, 50, Math.PI, 0); ctx.stroke();
+      for (let i = 0; i < 14; i++) { const a = Math.PI + i / 13 * Math.PI; circle(320 + Math.cos(a) * 50, 86 + Math.sin(a) * 50, 5, i % 2 ? '#ff9ab5' : '#fff'); circle(320 + Math.cos(a) * 50, 86 + Math.sin(a) * 50 - 3, 3, '#7acb7a'); }
+      txt('EMERALD HILLS EVENTS', 320, 34, { align: 'center', size: 11, color: '#7a5a2a', shadow: false });
+      txt('J & J  ·  11.21.2026', 320, 2, { align: 'center', size: 11, color: '#9a7a4a', shadow: false });
+    },
+    hud(sc) { const met = npcs.filter(n => n.full && n.talked).length; panel(8, 6, 250, 26); txt('Wedding party met ' + met + '/18', 16, 12, { size: 13 }); if (met >= 18 && Math.floor(sc.t * 2) % 2) txt('Go see your bride at the altar!', W - 14, 12, { align: 'right', size: 13, color: '#8a5a1a', shadow: false }); }
+  };
+  const sc = makeWalk(cfg);
+  sc.enter = () => say([['', 'Saturday, November 21, 2026. Emerald Hills Events, Promise City, Iowa. Semi-formal attire. Phones away during the ceremony: the photographer has it covered!'], ['Jake', 'Everyone I love is here. Time to meet the wedding party and then walk to my bride.']]);
+  return sc;
+}
+
+/* =====================================================================
+   CREDITS
+   ===================================================================== */
+function Credits() {
+  let t = 0;
+  const lines = [
+    ['JAKE & JULIA', 30, '#f5d98a'], ['', 10], ['Saturday, November 21, 2026', 16], ['Emerald Hills Events · Promise City, Iowa', 14], ['', 14],
+    ['Ceremony 2:30 PM', 15, '#cfe3ff'], ['Social Hour 3:30 PM', 15, '#cfe3ff'], ['Reception 4:30 – 8:00 PM', 15, '#cfe3ff'], ['', 22],
+    ['THE STORY', 18, '#f5d98a'], ['Drake University · Fall 2020', 13], ['Lord of the Rings updates · Winter 2025', 13], ['First date · April 24, 2025', 13], ['Canoes, anime, and music with lyrics', 13], ['Blue Heron Lake · The proposal', 13], ['', 22],
+    ['THE WEDDING PARTY', 18, '#f5d98a'], ...PARTY.map(p => [p[0] + ' – ' + p[1], 12]), ['', 22],
+    ['Counterclockwise. Always.', 16, '#9be37a'], ['', 14], ['Congratulations, Jake & Julia!', 22, '#ff9ab5'], ['', 10], ['With love, ' + GIFT_FROM, 16, '#f5d98a'], ['', 40],
+    ['Press SPACE to return to the title', 12, '#cfe3ff']
+  ];
+  let total = 0; lines.forEach(l => total += (l[1] || 12) + 10);
+  return {
+    enter() { saveProgress(6); },
+    update(dt) { t += dt; partsUpdate(dt); if (Math.random() < dt * 3) burst(rnd(40, W - 40), rnd(H, H + 20) - 100, 12, Math.random() < .5 ? 'heart' : 'c'); if (actPressed && t > 2) { fadeTo(() => go(Title())); } },
+    draw() {
+      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#1d1636'); g.addColorStop(1, '#5a2f5a'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      let y = H - t * 28;
+      if (y + total < 60) y = 60 - total + 0; const oy = Math.max(H - t * 28, H - total - 0 + 0);
+      let yy = Math.max(H - t * 28, -total + H - 40);
+      for (const l of lines) { txt(l[0], W / 2, yy, { align: 'center', size: l[1] || 12, color: l[2] || '#fff' }); yy += (l[1] || 12) + 10; }
+      partsDraw();
+    }
+  };
+}
+
+/* =====================================================================
+   TITLE and CHAPTER SELECT
+   ===================================================================== */
+const CH = [
+  { name: 'Friends First', date: 'Fall 2020 · Drake University', make: chapter1, intro: ['Fall 2020. A freshman named Jake is in his second week at Drake University.', 'A sophomore named Julia is at the same Campus Fellowship event. Neither knows yet what is coming.'], outro: ['Three years of friendship followed. In 2024 they both joined Community Groups at Walnut Creek Church, and they kept seeing each other through lots of shared friends.'] },
+  { name: 'Lord of the Rings', date: 'Winter 2024–25', make: chapter2, intro: ['Julia wants to read Jake’s favorite books. He wants to know how she likes them.'], outro: ['In January 2025 Jake started thinking about asking Julia out. Her thoughtful text updates helped confirm the decision.'] },
+  { name: 'The First Date', date: 'April 24, 2025', make: chapter3, intro: ['April 2025. A phone call, a yes, and a first date they would never forget.'], outro: ['A month of dates later, Jake and Julia officially started dating.'] },
+  { name: 'Canoes, Anime & Music', date: 'Summer 2025', make: chapter4, intro: ['They were dating with a purpose: to find out if God was leading them toward marriage.'], outro: ['Hours and hours of talking. The Lord kept guiding them toward marriage.'] },
+  { name: 'Blue Heron Lake', date: 'The Proposal', make: chapter5, intro: ['Julia loves to walk the three-mile loop around Blue Heron Lake in West Des Moines. Many of their early dates were walks and talks right here.'], outro: ['She said yes. Now: a wedding in Promise City, Iowa!'] },
+  { name: 'The Wedding', date: 'November 21, 2026 · Promise City, Iowa', make: chapter6, intro: ['Saturday, November 21, 2026. The big day has finally come.'], outro: [] }
+];
+function runChapter(i) {
+  const c = CH[i];
+  go(Card('Chapter ' + (i + 1) + ': ' + c.name, c.date, c.intro, () => {
+    go(c.make(() => {
+      saveProgress(i + 1);
+      fadeTo(() => {
+        if (i < 5) go(Card('Chapter ' + (i + 1) + ' complete!', c.name, c.outro, () => runChapter(i + 1), { c1: '#2a1d4a', c2: '#7a3b5a' }));
+        else go(Credits());
+      });
+    }));
+  }));
+}
+function daysToGo() {
+  const now = new Date(); const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((WEDDING - d0) / 86400000);
+}
+function Title() {
+  let t = 0;
+  const stars = Array.from({ length: 70 }, () => ({ x: rnd(0, W), y: rnd(0, H * .75), s: rnd(.5, 2.5) }));
+  return {
+    update(dt) { t += dt; partsUpdate(dt); if (Math.random() < dt * 1.5) burst(rnd(200, 440), 300, 3, 'heart'); if (actPressed) { sfx.blip(); fadeTo(() => go(Select())); } },
+    draw() {
+      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#141b3c'); g.addColorStop(.7, '#6b3f7a'); g.addColorStop(1, '#e08a7a'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      for (const s of stars) { ctx.globalAlpha = .4 + .6 * Math.abs(Math.sin(t * s.s + s.x)); rect(s.x, s.y, 2, 2, '#fff'); } ctx.globalAlpha = 1;
+      rect(0, 330, W, 70, '#3a4a3a'); rect(0, 330, W, 4, '#4a5e4a');
+      txt('JAKE & JULIA', W / 2, 40, { align: 'center', size: 44, color: '#f5d98a' });
+      txt('The Road to Promise City', W / 2, 96, { align: 'center', size: 20, color: '#ffd9e6' });
+      person(280, 330, JAKE_TUX, 2, 0); person(360, 330, JULIA_BRIDE, 1, 0); heart(320, 270 + Math.sin(t * 3) * 4, 14, '#ff6b8b');
+      const d = daysToGo();
+      txt(d > 0 ? d + ' days to go! · November 21, 2026' : d === 0 ? 'TODAY IS THE DAY! · November 21, 2026' : 'Married November 21, 2026', W / 2, 150, { align: 'center', size: 16 });
+      txt('A wedding gift game · Promise City, Iowa', W / 2, 176, { align: 'center', size: 13, color: '#cfe3ff' });
+      partsDraw();
+      if (Math.floor(t * 2) % 2) txt('Press SPACE / A to begin', W / 2, 360, { align: 'center', size: 15, color: '#fff' });
+      txt('Move: arrows / WASD · Talk: SPACE · Music: M', W / 2, 380, { align: 'center', size: 11, color: '#cfe3ff', shadow: false });
+    }
+  };
+}
+function Select() {
+  let sel = Math.min(progress, 5), t = 0;
+  return {
+    update(dt) {
+      t += dt;
+      if (navPress) { sel = clamp(sel + navPress, 0, Math.min(progress, 5)); navPress = 0; sfx.blip(); }
+      if (actPressed) { sfx.blip(); const i = sel; fadeTo(() => runChapter(i)); }
+    },
+    draw() {
+      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#1d2b4a'); g.addColorStop(1, '#4b3b6b'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      txt('CHOOSE A CHAPTER', W / 2, 24, { align: 'center', size: 22, color: '#f5d98a' });
+      CH.forEach((c, i) => {
+        const y = 80 + i * 44, lock = i > progress, on = i === sel;
+        panel(90, y, 460, 36, on ? 'rgba(245,217,138,.25)' : 'rgba(16,24,40,.8)', on ? '#f5d98a' : '#55608a');
+        txt((lock ? '🔒 ' : (i < progress ? '★ ' : '▶ ')) + (i + 1) + '. ' + c.name, 106, y + 5, { size: 14, color: lock ? '#7a7f99' : '#fff' });
+        txt(c.date, 106, y + 21, { size: 10, color: lock ? '#5a5f79' : '#cfe3ff', b: false });
+      });
+      txt('↑ ↓ choose · SPACE play', W / 2, H - 28, { align: 'center', size: 12, color: '#cfe3ff' });
+    }
+  };
+}
+
+/* ---------- main loop ---------- */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  ctx.clearRect(0, 0, W, H);
+  if (scene) {
+    const talking = dlgUpdate(dt);
+    if (fade.dir === 0) scene.update(dt, talking); else scene.update(0, true);
+    scene.draw(); dlgDraw();
+  }
+  if (fade.dir !== 0) {
+    fade.a += fade.dir * dt * 3.2;
+    if (fade.dir === 1 && fade.a >= 1) { fade.a = 1; fade.dir = -1; const cb = fade.cb; fade.cb = null; if (cb) cb(); }
+    else if (fade.dir === -1 && fade.a <= 0) { fade.a = 0; fade.dir = 0; }
+    ctx.fillStyle = 'rgba(0,0,0,' + clamp(fade.a, 0, 1) + ')'; ctx.fillRect(0, 0, W, H);
+  }
+  actPressed = false; navPress = 0;
+  requestAnimationFrame(frame);
+}
+window.JJ = { go, runChapter, CH, Title, Select, Credits, get scene() { return scene; }, get progress() { return progress; }, say };
+go(Title());
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
